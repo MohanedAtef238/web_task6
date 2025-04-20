@@ -44,15 +44,16 @@ const limiter = rateLimit({
 })
 
 // Middleware for role-based authorization
-const authorize = (role) => {
+const authorize = (role) => { // made this expect some form of grouped data and check using includes so we can check for moderator and admins in that one gateway
     return (req, res, next) => {
-        if (req.user.role !== role) {
+        if ( !role.includes(req.user.role)) {
             return res.status(403).json({ message: 'Access denied. Insufficient privileges.' });
         }
         next();
     };
 };
 
+app.use(limiter);
 // Registration endpoint
 app.post('/api/register', async (req, res) => {
     try {
@@ -60,14 +61,14 @@ app.post('/api/register', async (req, res) => {
 
         // Validate input
         if (!username || !password || !email || !role) {
-            return res.status(400).json({ message: 'please fill all the required fields, username, password, email, role. roles are numbered 0 to 2' });
+            return res.status(400).json({ message: 'please fill all the required fields, username, password, email, role. roles are user, admin, moderator' });
         }
         //email validation :D 
         if (!email.includes('@') || !email.endsWith('.com')) {
             return res.status(400).json({ message: 'Email must include "@" and end with ".com" tsk tsk tsk' });
         }
         // Password validation checks for length and characters
-        if ( password.length < 8 ||(!password.includes('!') && !password.includes('@') && !password.includes('#'))) {
+        if ( password.length < 8 ||(!password.includes('#') && !password.includes('@') && !password.includes('!'))) {
             return res.status(400).json({message: 'Password must be at least 8 characters long and include at least one special character (!, @, or #)'});
         }
         // after thinking of an approach i decided to go with this, i am aware i could use regex but i didnt understand the syntax for numerical checking thoroughly enough to justify using it
@@ -80,7 +81,9 @@ app.post('/api/register', async (req, res) => {
             break; // stop the loop once we find a number
           }
         }
-
+        if (!hasNumber) {
+            return res.status(400).json({ message: 'Password must contain at least one number.' });
+        }
         // Check if user already exists
         if (users.find(u => u.username === username)) {
             return res.status(400).json({ message: 'User already exists' });
@@ -91,18 +94,15 @@ app.post('/api/register', async (req, res) => {
         // Hash the password
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
-
         // Create new user
         const user = {
-            id: users.length + 1,
-            username,
-            email,
-            password: hashedPassword,
-            role: role || 'user' // Default role
-        };
-
+                id: users.length + 1,
+                username,
+                email,
+                password: hashedPassword,
+                role: role || 'user' // Default role
+            };
         users.push(user);
-
         res.status(201).json({ message: `User created successfully with role ${role}` });
     } catch (error) {
         res.status(500).json({ message: 'Error creating user' });
@@ -128,7 +128,7 @@ app.post('/api/login', async (req, res) => {
 
         // Create and assign token
         const token = jwt.sign(
-            { id: user.id, username: user.username, role: user.role },
+            { id: user.id, username: user.username, email: user.email, role: user.role },
             JWT_SECRET,
             { expiresIn: '1h' }
         );
@@ -143,9 +143,12 @@ app.post('/api/login', async (req, res) => {
 app.get('/api/protected', authenticateToken, (req, res) => {
     res.json({ message: 'This is a protected route', user: req.user });
 });
-
+//Moderator for admin and moderator
+app.get('/api/moderator', authenticateToken, authorize(['admin', 'moderator']), (req, res) => {
+    res.json({ message: 'Admin route', adminData: 'Secret admin data' });
+});
 // Admin-only route example
-app.get('/api/admin', authenticateToken, authorize('admin'), (req, res) => {
+app.get('/api/admin', authenticateToken, authorize(['admin']), (req, res) => {
     res.json({ message: 'Admin route', adminData: 'Secret admin data' });
 });
 
@@ -153,6 +156,85 @@ app.get('/api/admin', authenticateToken, authorize('admin'), (req, res) => {
 app.get('/api/public', (req, res) => {
     res.json({ message: 'This is a public route' });
 });
+
+app.get('/api/profile', authenticateToken, (req, res) => {
+    const { username, email, role } = req.user;
+    res.json({
+      user: {
+        username,
+        email,
+        role
+      }
+    });
+})
+
+app.put('/api/profile', authenticateToken, async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      if (!email && !password) {
+        return res.status(400).json({ message: 'Please provide an email or password to update.' });
+      }
+      //getting a user from their sent jwt
+      const userIdFromToken = req.user.id;
+      //the find function returns something like a pseudo pointer from what i understand so when i do something like user.password = abcd it will actually update the user in the array, i am not sure if this is the best way to do this but it was already used in the code and i didnt do further research.
+      const user = users.find(u => u.id === userIdFromToken); // syntax for finding a user from the token, i could have used the username but i thought this was more secure and less prone to impersonation 😱😱 
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      if (email) {
+        if (!email.includes('@') || !email.endsWith('.com')) { // copy pasted from my implementation above
+            return res.status(400).json({ message: 'Email must include "@" and end with ".com" tsk tsk tsk' });
+        }
+        if (users.find(u => u.email === email && u.id !== user.id)) { // makig sure we dont have users with the same email, since email providers dont allow this anyway :3
+            return res.status(400).json({ message: 'email already exists' });
+        }
+  
+        user.email = email;
+      }
+  
+      // Password validation and update if provided
+      if (password) {
+        if (password.length < 8 || (!password.includes('#') && !password.includes('@') && !password.includes('!'))) {
+          return res.status(400).json({ message: 'Password must be at least 8 characters and include a special character (!, @, or #)' });
+        }
+  
+        let hasNumber = false;
+        for (let i = 0; i < password.length; i++) {
+          if (!isNaN(password[i]) && password[i] !== ' ') {
+            hasNumber = true;
+            break;
+          }
+        }
+        if (!hasNumber) {
+          return res.status(400).json({ message: 'Password must contain at least one number.' });
+        }
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(password, salt);
+      }
+      res.json({ message: 'Profile updated successfully.' });
+    } catch (error) {
+      res.status(500).json({ message: 'Error updating profile.' });
+    }
+  });
+  
+
+  app.put('/api/users/:id/role', authenticateToken, authorize(['admin']), (req, res) => {
+    const userId = parseInt(req.params.id); // Get the ID from the URL
+    const { role } = req.body; // Expected to receive { "role": "moderator" }
+    if (!role) {
+      return res.status(400).json({ message: 'give me a role to update ya 7ag/7aga 🐀' });
+    }
+    if (role !== 'admin' && role !== 'moderator' && role !== 'user') {
+      return res.status(400).json({ message: "invalid role" });
+    }
+    const user = users.find(u => u.id === userId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+    user.role = role;
+    res.json({ message: 'User role updated to successfully.' });
+  });
+  
 
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
