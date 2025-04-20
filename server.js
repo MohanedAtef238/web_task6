@@ -1,7 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-import { rateLimit } from 'express-rate-limit'
+const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
 const app = express();
@@ -160,12 +160,10 @@ app.get('/api/public', (req, res) => {
 app.get('/api/profile', authenticateToken, (req, res) => {
     const { username, email, role } = req.user;
     res.json({
-      user: {
         username,
         email,
         role
-      }
-    });
+      });
 })
 
 app.put('/api/profile', authenticateToken, async (req, res) => {
@@ -236,12 +234,16 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
   });
   
 
-app.listen(PORT, () => {
+  app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
     console.log('Available endpoints:');
     console.log('POST /api/register - Register a new user');
     console.log('POST /api/login - Login and get JWT token');
+    console.log('GET /api/profile - Get current user profile');
+    console.log('PUT /api/profile - Update current user email or password');
+    console.log('PUT /api/users/:id/role - Admin only: update another user\'s role');
     console.log('GET /api/protected - Protected route (requires authentication)');
     console.log('GET /api/admin - Admin only route');
+    console.log('GET /api/moderator - Admin and moderator route');
     console.log('GET /api/public - Public route');
-}); 
+});
